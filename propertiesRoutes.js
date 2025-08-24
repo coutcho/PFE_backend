@@ -153,10 +153,10 @@ router.post("/", authenticateToken, upload, async (req, res) => {
       if (error) throw error;
 
       // Get the public URL
-      const { publicUrl } = supabase.storage
+      const { data: publicUrlData } = supabase.storage
         .from("property_images")
         .getPublicUrl(data.path);
-      images_path.push(publicUrl);
+      images_path.push(publicUrlData.publicUrl);
 
       // Optional: delete the temporary file
       fs.unlinkSync(file.path);
