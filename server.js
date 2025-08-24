@@ -18,6 +18,7 @@ import dotenv from "dotenv";
 import pool from "./db.js";
 dotenv.config();
 const BASE_URL = process.env.BASE_URL;
+const FRONTEND_URL = process.env.FRONTEND_URL;
 const app = express();
 const port = 3001;
 
@@ -327,7 +328,7 @@ app.post("/api/forgot-password", async (req, res) => {
       [user.id, resetToken, new Date(Date.now() + 3600000)]
     );
 
-    const resetUrl = `${BASE_URL}/reset-password?token=${resetToken}`;
+    const resetUrl = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
     const mailOptions = {
       from: "rayanos.adjinatos@gmail.com",
       to: email,
