@@ -9,23 +9,25 @@ import passport from "passport";
 import session from "express-session";
 import FacebookStrategy from "passport-facebook";
 import GoogleStrategy from "passport-google-oauth20";
-import propertiesRoutes from './propertiesRoutes.js';
-import usersRoutes from './usersRoutes.js';
-import inquiriesRoutes from './inquiriesRoutes.js';
-import homeValuesRoutes from './HomeValueRoutes.js'
-import analyticsRoutes from './analyticsRoutes.js'
+import propertiesRoutes from "./propertiesRoutes.js";
+import usersRoutes from "./usersRoutes.js";
+import inquiriesRoutes from "./inquiriesRoutes.js";
+import homeValuesRoutes from "./HomeValueRoutes.js";
+import analyticsRoutes from "./analyticsRoutes.js";
 import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
 const port = 3001;
 
-app.use(cors({
-  origin: 'http://localhost:5173', // Match your frontend's origin (Vite default)
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: "https://manzilkom.netlify.app", // Match your frontend's origin (Vite default)
+    credentials: true,
+  })
+);
 app.use(express.json());
-app.use(express.static('public')); // Serve static files from public/ (includes uploads/)
+app.use(express.static("public")); // Serve static files from public/ (includes uploads/)
 app.use(
   session({
     secret: process.env.SESSION_SECRET, // Replace with a strong secret
@@ -44,7 +46,6 @@ const pool = new Pool({
   password: process.env.PGPASSWORD,
   port: parseInt(process.env.PGPORT),
 });
-
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -80,7 +81,9 @@ passport.use(
     async (accessToken, refreshToken, profile, done) => {
       try {
         const email = profile.emails[0].value;
-        let user = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        let user = await pool.query("SELECT * FROM users WHERE email = $1", [
+          email,
+        ]);
 
         if (user.rows.length === 0) {
           user = await pool.query(
@@ -107,7 +110,9 @@ passport.use(
     async (accessToken, refreshToken, profile, done) => {
       try {
         const email = profile.emails[0].value;
-        let user = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        let user = await pool.query("SELECT * FROM users WHERE email = $1", [
+          email,
+        ]);
 
         if (user.rows.length === 0) {
           user = await pool.query(
@@ -126,13 +131,19 @@ passport.use(
 // Password check function
 const checkPasswordWithHIBP = async (password) => {
   try {
-    const hash = createHash("sha1").update(password).digest("hex").toUpperCase();
+    const hash = createHash("sha1")
+      .update(password)
+      .digest("hex")
+      .toUpperCase();
     const prefix = hash.slice(0, 5);
     const suffix = hash.slice(5);
 
-    const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
-      headers: { "Add-Padding": "true" },
-    });
+    const response = await fetch(
+      `https://api.pwnedpasswords.com/range/${prefix}`,
+      {
+        headers: { "Add-Padding": "true" },
+      }
+    );
     const text = await response.text();
 
     const lines = text.split("\n");
@@ -158,18 +169,33 @@ app.post("/api/signup", async (req, res) => {
   }
 
   if (pass.length < 8) {
-    return res.status(400).json({ message: "Le mot de passe doit contenir au moins 8 caractères" });
+    return res
+      .status(400)
+      .json({ message: "Le mot de passe doit contenir au moins 8 caractères" });
   }
   if (pass.toLowerCase().startsWith("12345678")) {
-    return res.status(400).json({ message: "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé." });
+    return res
+      .status(400)
+      .json({
+        message:
+          "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé.",
+      });
   }
   const isPwned = await checkPasswordWithHIBP(pass);
   if (isPwned) {
-    return res.status(400).json({ message: "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé." });
+    return res
+      .status(400)
+      .json({
+        message:
+          "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé.",
+      });
   }
 
   try {
-    const existingUser = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    const existingUser = await pool.query(
+      "SELECT * FROM users WHERE email = $1",
+      [email]
+    );
     if (existingUser.rows.length > 0) {
       return res.status(400).json({ message: "Email already in use" });
     }
@@ -245,7 +271,10 @@ app.post("/api/signin", async (req, res) => {
 });
 
 // Facebook Login Routes
-app.get("/auth/facebook", passport.authenticate("facebook", { scope: ["email"] }));
+app.get(
+  "/auth/facebook",
+  passport.authenticate("facebook", { scope: ["email"] })
+);
 
 app.get(
   "/auth/facebook/callback",
@@ -290,14 +319,20 @@ app.post("/api/forgot-password", async (req, res) => {
   }
 
   try {
-    const userQuery = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    const userQuery = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
     const user = userQuery.rows[0];
 
     if (!user) {
-      return res.status(200).json({ message: "If the email exists, a reset link has been sent." });
+      return res
+        .status(200)
+        .json({ message: "If the email exists, a reset link has been sent." });
     }
 
-    const resetToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "1h" });
+    const resetToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "1h",
+    });
 
     await pool.query(
       "INSERT INTO reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
@@ -314,7 +349,9 @@ app.post("/api/forgot-password", async (req, res) => {
 
     await transporter.sendMail(mailOptions);
 
-    res.status(200).json({ message: "If the email exists, a reset link has been sent." });
+    res
+      .status(200)
+      .json({ message: "If the email exists, a reset link has been sent." });
   } catch (error) {
     console.error("Error in forgot-password:", error);
     res.status(500).json({ message: "Server error, please try again later" });
@@ -326,7 +363,9 @@ app.post("/api/reset-password", async (req, res) => {
   const { token, newPassword } = req.body;
 
   if (!token || !newPassword) {
-    return res.status(400).json({ message: "Token and new password are required" });
+    return res
+      .status(400)
+      .json({ message: "Token and new password are required" });
   }
 
   try {
@@ -338,7 +377,9 @@ app.post("/api/reset-password", async (req, res) => {
     const resetToken = tokenQuery.rows[0];
 
     if (!resetToken || resetToken.user_id !== decoded.id) {
-      return res.status(400).json({ message: "Invalid or expired reset token" });
+      return res
+        .status(400)
+        .json({ message: "Invalid or expired reset token" });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -350,7 +391,9 @@ app.post("/api/reset-password", async (req, res) => {
 
     await pool.query("DELETE FROM reset_tokens WHERE token = $1", [token]);
 
-    res.status(200).json({ message: "Password reset successfully! You can now sign in." });
+    res
+      .status(200)
+      .json({ message: "Password reset successfully! You can now sign in." });
   } catch (error) {
     console.error("Error in reset-password:", error);
     if (error.name === "TokenExpiredError") {
@@ -390,11 +433,11 @@ app.post("/api/contact", async (req, res) => {
 });
 
 // Mount the routes
-app.use('/api/properties', propertiesRoutes);
-app.use('/api/users', usersRoutes);
-app.use('/api/inquiries', inquiriesRoutes);
-app.use('/api/home-values', homeValuesRoutes);
-app.use('/api/analytics', analyticsRoutes);
+app.use("/api/properties", propertiesRoutes);
+app.use("/api/users", usersRoutes);
+app.use("/api/inquiries", inquiriesRoutes);
+app.use("/api/home-values", homeValuesRoutes);
+app.use("/api/analytics", analyticsRoutes);
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
@@ -402,6 +445,6 @@ app.listen(port, () => {
 console.log("DB ENV:", {
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
- clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
 });
