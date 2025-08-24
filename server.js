@@ -67,7 +67,7 @@ passport.use(
     {
       clientID: "1376129730264892",
       clientSecret: "110e3a97476f4b94f317276a86388508",
-      callbackURL: "http://localhost:3001/auth/facebook/callback",
+      callbackURL: `${BASE_URL}/auth/facebook/callback`,
       profileFields: ["id", "displayName", "emails"],
     },
     async (accessToken, refreshToken, profile, done) => {
@@ -97,7 +97,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:3001/auth/google/callback",
+      callbackURL: `${BASE_URL}/auth/google/callback`,
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
@@ -274,7 +274,7 @@ app.get(
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
-    res.redirect(`http://localhost:5173/auth/callback?token=${token}`);
+    res.redirect(`${BASE_URL}/auth/callback?token=${token}`);
   }
 );
 
@@ -294,7 +294,7 @@ app.get(
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
-    res.redirect(`http://localhost:5173/auth/callback?token=${token}`);
+    res.redirect(`${BASE_URL}/auth/callback?token=${token}`);
   }
 );
 
@@ -327,7 +327,7 @@ app.post("/api/forgot-password", async (req, res) => {
       [user.id, resetToken, new Date(Date.now() + 3600000)]
     );
 
-    const resetUrl = `http://localhost:5173/reset-password?token=${resetToken}`;
+    const resetUrl = `${BASE_URL}/reset-password?token=${resetToken}`;
     const mailOptions = {
       from: "rayanos.adjinatos@gmail.com",
       to: email,
