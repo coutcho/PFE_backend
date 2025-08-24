@@ -17,7 +17,7 @@ import analyticsRoutes from "./analyticsRoutes.js";
 import dotenv from "dotenv";
 import pool from "./db.js";
 dotenv.config();
-
+const BASE_URL = process.env.BASE_URL;
 const app = express();
 const port = 3001;
 
