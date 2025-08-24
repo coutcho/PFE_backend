@@ -15,6 +15,7 @@ import inquiriesRoutes from "./inquiriesRoutes.js";
 import homeValuesRoutes from "./HomeValueRoutes.js";
 import analyticsRoutes from "./analyticsRoutes.js";
 import dotenv from "dotenv";
+import pool from "./db.js";
 dotenv.config();
 
 const app = express();
@@ -37,15 +38,6 @@ app.use(
 );
 app.use(passport.initialize());
 app.use(passport.session());
-
-const { Pool } = pkg;
-const pool = new Pool({
-  user: process.env.PGUSER,
-  host: process.env.PGHOST,
-  database: process.env.PGDATABASE,
-  password: process.env.PGPASSWORD,
-  port: parseInt(process.env.PGPORT),
-});
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -174,21 +166,17 @@ app.post("/api/signup", async (req, res) => {
       .json({ message: "Le mot de passe doit contenir au moins 8 caractères" });
   }
   if (pass.toLowerCase().startsWith("12345678")) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé.",
-      });
+    return res.status(400).json({
+      message:
+        "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé.",
+    });
   }
   const isPwned = await checkPasswordWithHIBP(pass);
   if (isPwned) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé.",
-      });
+    return res.status(400).json({
+      message:
+        "Ce mot de passe est trop courant. Veuillez en choisir un plus sécurisé.",
+    });
   }
 
   try {
