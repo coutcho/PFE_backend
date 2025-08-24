@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import multer from "multer";
 import pool from "./db.js";
 import fs from "fs";
-import { supabase } from "./supabase.js";
+import supabase from "./supabase.js";
 
 const router = express.Router();
 
