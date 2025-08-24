@@ -144,7 +144,7 @@ router.post("/", authenticateToken, upload, async (req, res) => {
     for (const file of files) {
       const fileBuffer = fs.readFileSync(file.path);
       const { data, error } = await supabase.storage
-        .from("property-images") // Make sure you create this bucket in Supabase
+        .from("property_images") // Make sure you create this bucket in Supabase
         .upload(`${Date.now()}-${file.originalname}`, fileBuffer, {
           contentType: file.mimetype,
           upsert: true,
@@ -154,7 +154,7 @@ router.post("/", authenticateToken, upload, async (req, res) => {
 
       // Get the public URL
       const { publicUrl } = supabase.storage
-        .from("property-images")
+        .from("property_images")
         .getPublicUrl(data.path);
       images_path.push(publicUrl);
 
