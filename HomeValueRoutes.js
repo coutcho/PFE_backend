@@ -26,6 +26,21 @@ async function uploadToSupabase(file) {
 }
 
 /**
+ * Helper: Convert timestamp fields to ISO
+ */
+function normalizeTimestamps(rows) {
+  return rows.map((row) => {
+    const newRow = { ...row };
+    for (const key in newRow) {
+      if (newRow[key] instanceof Date) {
+        newRow[key] = newRow[key].toISOString();
+      }
+    }
+    return newRow;
+  });
+}
+
+/**
  * ====================
  * Routes
  * ====================
@@ -37,7 +52,7 @@ router.get("/user-and-expert", async (req, res) => {
     const result = await pool.query(
       "SELECT * FROM users WHERE role IN ('user', 'expert')"
     );
-    res.json(result.rows);
+    res.json(normalizeTimestamps(result.rows));
   } catch (err) {
     console.error("Error fetching users/experts:", err);
     res.status(500).json({ error: "Server error" });
@@ -52,7 +67,7 @@ router.put("/:id/validate", async (req, res) => {
       "UPDATE home_values SET validated = true WHERE id = $1 RETURNING *",
       [id]
     );
-    res.json(result.rows[0]);
+    res.json(normalizeTimestamps(result.rows)[0]);
   } catch (err) {
     console.error("Error validating home value:", err);
     res.status(500).json({ error: "Server error" });
@@ -65,7 +80,7 @@ router.get("/", async (req, res) => {
     const result = await pool.query(
       "SELECT * FROM home_values ORDER BY id DESC"
     );
-    res.json(result.rows);
+    res.json(normalizeTimestamps(result.rows));
   } catch (err) {
     console.error("Error fetching home values:", err);
     res.status(500).json({ error: "Server error" });
@@ -91,7 +106,7 @@ router.post("/", upload.array("images", 5), async (req, res) => {
       [title, description, price, user_id, imageUrls]
     );
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(normalizeTimestamps(result.rows)[0]);
   } catch (err) {
     console.error("Error creating home value:", err);
     res.status(500).json({ error: "Server error" });
@@ -121,7 +136,7 @@ router.put("/:id", upload.array("images", 5), async (req, res) => {
       [title, description, price, imageUrls, id]
     );
 
-    res.json(result.rows[0]);
+    res.json(normalizeTimestamps(result.rows)[0]);
   } catch (err) {
     console.error("Error updating home value:", err);
     res.status(500).json({ error: "Server error" });
@@ -147,7 +162,7 @@ router.get("/:id", async (req, res) => {
     const result = await pool.query("SELECT * FROM home_values WHERE id = $1", [
       id,
     ]);
-    res.json(result.rows[0]);
+    res.json(normalizeTimestamps(result.rows)[0]);
   } catch (err) {
     console.error("Error fetching home value:", err);
     res.status(500).json({ error: "Server error" });
