@@ -1,44 +1,41 @@
+// backend/index.js
 import express from "express";
-import jwt from "jsonwebtoken";
+import cors from "cors";
+import pg from "pg";
 import multer from "multer";
-import pool from "./db.js";
-import supabase from "./supabase.js";
+import dotenv from "dotenv";
+import { createClient } from "@supabase/supabase-js";
 
-const router = express.Router();
+dotenv.config();
 
-// Multer: store files in memory instead of disk
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// PostgreSQL pool
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+// Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
+// Middlewares
+app.use(express.json());
+app.use(cors());
+
+// Multer memory storage (not saving locally)
 const storage = multer.memoryStorage();
-const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
-  fileFilter: (req, file, cb) => {
-    if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("Only image files are allowed"), false);
-    }
-    cb(null, true);
-  },
-}).array("images", 10);
+const upload = multer({ storage }).array("images", 10);
 
-// Middleware for JWT auth
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
-  if (!token)
-    return res.status(401).json({ message: "Authentication required" });
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err)
-      return res.status(403).json({ message: "Invalid or expired token" });
-    req.user = user;
-    next();
-  });
-};
-
-// Upload helper: push file to Supabase
+// Helper to upload to Supabase
 const uploadToSupabase = async (file) => {
   const fileName = `${Date.now()}-${file.originalname}`;
   const { error } = await supabase.storage
-    .from("property_images") // 👈 name of your bucket
+    .from("property_images") // bucket name
     .upload(fileName, file.buffer, {
       contentType: file.mimetype,
     });
@@ -48,195 +45,111 @@ const uploadToSupabase = async (file) => {
   const { data } = supabase.storage
     .from("property_images")
     .getPublicUrl(fileName);
+
   return data.publicUrl;
 };
 
-// ---------------- ROUTES ---------------- //
+// ROUTES
 
-// CREATE new home value request
-router.post("/", authenticateToken, upload, async (req, res) => {
-  const { address } = req.body;
-  const userId = req.user.id;
-
-  if (!address) {
-    return res.status(400).json({ message: "Address is required" });
-  }
-
+// Create new home value (listing)
+app.post("/api/home-values", upload, async (req, res) => {
   try {
+    const { address } = req.body;
+    const userId = req.user?.id || null; // adjust if using auth middleware
+
     const images = [];
-    for (const file of req.files || []) {
-      const url = await uploadToSupabase(file);
-      images.push(url);
+    if (req.files) {
+      for (const file of req.files) {
+        const url = await uploadToSupabase(file);
+        images.push(url);
+      }
     }
 
     const result = await pool.query(
-      "INSERT INTO home_values (address, images, user_id, expert_id, created_at) VALUES ($1, $2, $3, NULL, NOW()) RETURNING *",
+      `INSERT INTO home_values (address, images, user_id, expert_id, created_at)
+       VALUES ($1, $2, $3, NULL, NOW()) RETURNING *`,
       [address, JSON.stringify(images), userId]
     );
 
-    res.status(200).json({
-      message: "Home value request submitted successfully",
-      data: result.rows[0],
-    });
-  } catch (error) {
-    console.error("Error processing home value:", error);
-    res.status(500).json({
-      message: "Failed to process home value request",
-      error: error.message,
-    });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error inserting home value:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// SEND a message (with optional images)
-router.post("/:id/messages", authenticateToken, upload, async (req, res) => {
-  const { id } = req.params;
-  const { message } = req.body;
-  const userId = req.user.id;
-  const userRole = req.user.role;
-
-  const images = [];
-  for (const file of req.files || []) {
-    const url = await uploadToSupabase(file);
-    images.push(url);
-  }
-
-  if (!message && images.length === 0) {
-    return res.status(400).json({ message: "Message or images required" });
-  }
-
-  try {
-    const homeValueCheck = await pool.query(
-      "SELECT user_id, expert_id FROM home_values WHERE id = $1",
-      [id]
-    );
-    if (homeValueCheck.rowCount === 0) {
-      return res.status(404).json({ message: "Home value request not found" });
-    }
-    const { user_id, expert_id } = homeValueCheck.rows[0];
-
-    if (userId !== user_id && userRole !== "expert") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    if (userRole === "expert" && expert_id !== null && expert_id !== userId) {
-      return res
-        .status(403)
-        .json({ message: "Request assigned to another expert" });
-    }
-
-    const result = await pool.query(
-      "INSERT INTO messages (home_value_id, sender_id, message, images, created_at, is_read) VALUES ($1, $2, $3, $4, NOW(), FALSE) RETURNING *",
-      [id, userId, message || "", JSON.stringify(images)]
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error("Error sending home value message:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// GET all home value requests (admin/expert)
-router.get("/", authenticateToken, async (req, res) => {
+// Get all home values
+app.get("/api/home-values", async (req, res) => {
   try {
     const result = await pool.query(
       "SELECT * FROM home_values ORDER BY created_at DESC"
     );
     res.json(result.rows);
-  } catch (error) {
-    console.error("Error fetching home values:", error);
-    res.status(500).json({ message: "Server error" });
+  } catch (err) {
+    console.error("Error fetching home values:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// GET single home value request
-router.get("/:id", authenticateToken, async (req, res) => {
-  const { id } = req.params;
+// Update existing home value
+app.put("/api/home-values/:id", upload, async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM home_values WHERE id = $1", [
-      id,
-    ]);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: "Home value request not found" });
+    const { id } = req.params;
+    const { address, existingImages } = req.body;
+
+    let images = JSON.parse(existingImages || "[]");
+
+    if (req.files) {
+      for (const file of req.files) {
+        const url = await uploadToSupabase(file);
+        images.push(url);
+      }
     }
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Error fetching home value:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// UPDATE home value request (e.g. add more images)
-router.put("/:id", authenticateToken, upload, async (req, res) => {
-  const { id } = req.params;
-  const { address } = req.body;
-  const userId = req.user.id;
-
-  try {
-    const homeValueCheck = await pool.query(
-      "SELECT * FROM home_values WHERE id = $1",
-      [id]
-    );
-    if (homeValueCheck.rowCount === 0) {
-      return res.status(404).json({ message: "Home value request not found" });
-    }
-
-    const homeValue = homeValueCheck.rows[0];
-    if (homeValue.user_id !== userId) {
-      return res
-        .status(403)
-        .json({ message: "You can only update your own requests" });
-    }
-
-    // Upload new images
-    const newImages = [];
-    for (const file of req.files || []) {
-      const url = await uploadToSupabase(file);
-      newImages.push(url);
-    }
-
-    // Keep old images + add new ones
-    const existingImages = homeValue.images || [];
-    const updatedImages = [...existingImages, ...newImages];
 
     const result = await pool.query(
-      "UPDATE home_values SET address = $1, images = $2 WHERE id = $3 RETURNING *",
-      [address || homeValue.address, JSON.stringify(updatedImages), id]
+      `UPDATE home_values
+       SET address = $1, images = $2
+       WHERE id = $3
+       RETURNING *`,
+      [address, JSON.stringify(images), id]
     );
 
     res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Error updating home value:", error);
-    res.status(500).json({ message: "Server error" });
+  } catch (err) {
+    console.error("Error updating home value:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// DELETE home value request
-router.delete("/:id", authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const userId = req.user.id;
-
+// Other routes (keep your existing ones)
+app.get("/api/user-and-expert", async (req, res) => {
+  // example: fetch users + experts
   try {
-    const homeValueCheck = await pool.query(
-      "SELECT * FROM home_values WHERE id = $1",
+    const result = await pool.query(
+      "SELECT * FROM users WHERE role IN ('user','expert')"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching users/experts:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.put("/api/home-values/:id/validate", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `UPDATE home_values SET validated = true WHERE id = $1 RETURNING *`,
       [id]
     );
-    if (homeValueCheck.rowCount === 0) {
-      return res.status(404).json({ message: "Home value request not found" });
-    }
-
-    const homeValue = homeValueCheck.rows[0];
-    if (homeValue.user_id !== userId) {
-      return res
-        .status(403)
-        .json({ message: "You can only delete your own requests" });
-    }
-
-    await pool.query("DELETE FROM home_values WHERE id = $1", [id]);
-    res.json({ message: "Home value request deleted successfully" });
-  } catch (error) {
-    console.error("Error deleting home value:", error);
-    res.status(500).json({ message: "Server error" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error validating home value:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-export default router;
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
