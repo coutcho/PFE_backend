@@ -1,171 +1,291 @@
-// HomeValueRoutes.js
 import express from "express";
+import jwt from "jsonwebtoken";
 import multer from "multer";
 import pool from "./db.js";
-import supabase from "./supabase.js";
+import { createClient } from "@supabase/supabase-js";
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
 
-/**
- * Helper: Upload image to Supabase storage
- */
-async function uploadToSupabase(file) {
-  const fileName = `${Date.now()}-${file.originalname}`;
-  const { error } = await supabase.storage
-    .from("property_images")
-    .upload(fileName, file.buffer, { contentType: file.mimetype });
+// Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
-  if (error) throw error;
-
-  // Generate public URL
-  const { data } = supabase.storage
-    .from("property_images")
-    .getPublicUrl(fileName);
-  return data.publicUrl;
-}
-
-/**
- * Helper: Convert timestamp fields to ISO
- */
-function normalizeTimestamps(rows) {
-  return rows.map((row) => {
-    const newRow = { ...row };
-    for (const key in newRow) {
-      if (newRow[key] instanceof Date) {
-        newRow[key] = newRow[key].toISOString();
-      }
+// Multer for memory storage (since we’ll upload directly to Supabase)
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("image/")) {
+      return cb(new Error("Only image files are allowed"), false);
     }
-    return newRow;
+    cb(null, true);
+  },
+}).array("images", 10);
+
+// JWT authentication
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+  if (!token)
+    return res.status(401).json({ message: "Authentication required" });
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err)
+      return res.status(403).json({ message: "Invalid or expired token" });
+    req.user = user;
+    next();
   });
-}
+};
 
-/**
- * ====================
- * Routes
- * ====================
- */
+// Helper → format timestamps consistently
+const normalizeTimestamps = (rows) => {
+  return rows.map((r) => ({
+    ...r,
+    created_at: r.created_at ? new Date(r.created_at).toISOString() : null,
+  }));
+};
 
-// ✅ Get all users & experts (must come BEFORE /:id)
-router.get("/user-and-expert", async (req, res) => {
+// Upload files to Supabase
+const uploadToSupabase = async (files) => {
+  const uploadedUrls = [];
+  for (const file of files) {
+    const fileName = `${Date.now()}-${file.originalname}`;
+    const { error } = await supabase.storage
+      .from("uploads") // bucket name
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true,
+      });
+
+    if (error) {
+      console.error("Supabase upload error:", error);
+      continue;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from("uploads")
+      .getPublicUrl(fileName);
+
+    uploadedUrls.push(publicUrlData.publicUrl);
+  }
+  return uploadedUrls;
+};
+
+// --- ROUTES ---
+
+// Create home value request
+router.post("/", authenticateToken, upload, async (req, res) => {
+  const { address } = req.body;
+  const userId = req.user.id;
+
+  if (!address) {
+    return res.status(400).json({ message: "Address is required" });
+  }
+
   try {
+    const imageUrls = await uploadToSupabase(req.files);
+
     const result = await pool.query(
-      "SELECT * FROM users WHERE role IN ('user', 'expert')"
+      `INSERT INTO home_values (address, images, user_id, expert_id, created_at)
+       VALUES ($1, $2, $3, NULL, NOW()) RETURNING *`,
+      [address, JSON.stringify(imageUrls), userId]
     );
-    res.json(normalizeTimestamps(result.rows));
-  } catch (err) {
-    console.error("Error fetching users/experts:", err);
-    res.status(500).json({ error: "Server error" });
+
+    res.status(200).json({
+      message: "Home value request submitted successfully",
+      data: normalizeTimestamps(result.rows)[0],
+    });
+  } catch (error) {
+    console.error("Error processing home value:", error);
+    res
+      .status(500)
+      .json({
+        message: "Failed to process home value request",
+        error: error.message,
+      });
   }
 });
 
-// ✅ Validate a home value (must come BEFORE /:id)
-router.put("/:id/validate", async (req, res) => {
+// Fetch home values (user/expert)
+router.get("/user-and-expert", authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    let query;
+    if (userRole === "expert") {
+      query = await pool.query(
+        `SELECT hv.*, u.fullname AS user_name
+         FROM home_values hv
+         LEFT JOIN users u ON hv.user_id = u.id
+         WHERE hv.expert_id IS NULL OR hv.expert_id = $1
+         ORDER BY hv.created_at DESC`,
+        [userId]
+      );
+    } else {
+      query = await pool.query(
+        `SELECT hv.*, u.fullname AS user_name
+         FROM home_values hv
+         LEFT JOIN users u ON hv.user_id = u.id
+         WHERE hv.user_id = $1
+         ORDER BY hv.created_at DESC`,
+        [userId]
+      );
+    }
+    res.json(normalizeTimestamps(query.rows));
+  } catch (error) {
+    console.error("Error fetching home value requests:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Claim request (expert only)
+router.post("/:id/validate", authenticateToken, async (req, res) => {
   const { id } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  if (userRole !== "expert") {
+    return res
+      .status(403)
+      .json({ message: "Access restricted to experts only" });
+  }
   try {
     const result = await pool.query(
-      "UPDATE home_values SET validated = true WHERE id = $1 RETURNING *",
+      "UPDATE home_values SET expert_id = $1 WHERE id = $2 AND expert_id IS NULL RETURNING *",
+      [userId, id]
+    );
+    if (result.rowCount === 0) {
+      return res
+        .status(400)
+        .json({ message: "Request already assigned or not found" });
+    }
+    res.json({
+      message: "Request assigned to you",
+      data: normalizeTimestamps(result.rows)[0],
+    });
+  } catch (error) {
+    console.error("Error validating home value request:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Delete request
+router.delete("/:id", authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    await pool.query("BEGIN");
+    const checkRequest = await pool.query(
+      "SELECT user_id, expert_id FROM home_values WHERE id = $1",
       [id]
     );
-    res.json(normalizeTimestamps(result.rows)[0]);
-  } catch (err) {
-    console.error("Error validating home value:", err);
-    res.status(500).json({ error: "Server error" });
+    if (checkRequest.rowCount === 0) {
+      await pool.query("ROLLBACK");
+      return res.status(404).json({ message: "Home value request not found" });
+    }
+    const request = checkRequest.rows[0];
+    if (
+      request.user_id !== userId &&
+      (userRole !== "expert" || request.expert_id !== userId)
+    ) {
+      await pool.query("ROLLBACK");
+      return res
+        .status(403)
+        .json({ message: "You do not have permission to delete this request" });
+    }
+    await pool.query("DELETE FROM messages WHERE home_value_id = $1", [id]);
+    await pool.query("DELETE FROM home_values WHERE id = $1 RETURNING *", [id]);
+    await pool.query("COMMIT");
+    res.status(204).send();
+  } catch (error) {
+    await pool.query("ROLLBACK");
+    console.error("Error deleting home value:", error);
+    res.status(500).json({ message: "Server error", details: error.message });
   }
 });
 
-// ✅ Get all home values
-router.get("/", async (req, res) => {
+// Fetch messages
+router.get("/:id/messages", authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
   try {
+    const homeValueCheck = await pool.query(
+      "SELECT user_id, expert_id FROM home_values WHERE id = $1",
+      [id]
+    );
+    if (homeValueCheck.rowCount === 0) {
+      return res.status(404).json({ message: "Home value request not found" });
+    }
+    const { user_id, expert_id } = homeValueCheck.rows[0];
+    if (userId !== user_id && userRole !== "expert") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    if (userRole === "expert" && expert_id !== null && expert_id !== userId) {
+      return res
+        .status(403)
+        .json({ message: "Request assigned to another expert" });
+    }
     const result = await pool.query(
-      "SELECT * FROM home_values ORDER BY id DESC"
+      `SELECT m.*, 
+              CASE WHEN m.sender_id = $2 THEN 'self' ELSE 'other' END AS message_type
+       FROM messages m
+       WHERE m.home_value_id = $1
+       ORDER BY m.created_at ASC`,
+      [id, userId]
     );
     res.json(normalizeTimestamps(result.rows));
-  } catch (err) {
-    console.error("Error fetching home values:", err);
-    res.status(500).json({ error: "Server error" });
+  } catch (error) {
+    console.error("Error fetching home value messages:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
-// ✅ Create a new home value with images
-router.post("/", upload.array("images", 5), async (req, res) => {
-  try {
-    const { title, description, price, user_id } = req.body;
+// Send message
+router.post("/:id/messages", authenticateToken, upload, async (req, res) => {
+  const { id } = req.params;
+  const { message } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
 
-    // Upload images to Supabase
-    const imageUrls = [];
-    for (const file of req.files) {
-      const url = await uploadToSupabase(file);
-      imageUrls.push(url);
+  if (!message && (!req.files || req.files.length === 0)) {
+    return res.status(400).json({ message: "Message or images required" });
+  }
+
+  try {
+    const homeValueCheck = await pool.query(
+      "SELECT user_id, expert_id FROM home_values WHERE id = $1",
+      [id]
+    );
+    if (homeValueCheck.rowCount === 0) {
+      return res.status(404).json({ message: "Home value request not found" });
+    }
+    const { user_id, expert_id } = homeValueCheck.rows[0];
+    if (userId !== user_id && userRole !== "expert") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    if (userRole === "expert" && expert_id !== null && expert_id !== userId) {
+      return res
+        .status(403)
+        .json({ message: "Request assigned to another expert" });
     }
 
+    const imageUrls = await uploadToSupabase(req.files);
+
     const result = await pool.query(
-      `INSERT INTO home_values (title, description, price, user_id, images_path)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO messages (home_value_id, sender_id, message, images, created_at, is_read)
+       VALUES ($1, $2, $3, $4, NOW(), FALSE)
        RETURNING *`,
-      [title, description, price, user_id, imageUrls]
+      [id, userId, message || "", JSON.stringify(imageUrls)]
     );
 
     res.status(201).json(normalizeTimestamps(result.rows)[0]);
-  } catch (err) {
-    console.error("Error creating home value:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// ✅ Update home value
-router.put("/:id", upload.array("images", 5), async (req, res) => {
-  const { id } = req.params;
-  const { title, description, price } = req.body;
-
-  try {
-    let imageUrls = [];
-
-    // Upload new images if provided
-    if (req.files.length > 0) {
-      for (const file of req.files) {
-        const url = await uploadToSupabase(file);
-        imageUrls.push(url);
-      }
-    }
-
-    const result = await pool.query(
-      `UPDATE home_values
-       SET title = $1, description = $2, price = $3, images_path = $4
-       WHERE id = $5 RETURNING *`,
-      [title, description, price, imageUrls, id]
-    );
-
-    res.json(normalizeTimestamps(result.rows)[0]);
-  } catch (err) {
-    console.error("Error updating home value:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// ✅ Delete home value
-router.delete("/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    await pool.query("DELETE FROM home_values WHERE id = $1", [id]);
-    res.json({ message: "Home value deleted" });
-  } catch (err) {
-    console.error("Error deleting home value:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// ❗️ Generic route must come LAST
-router.get("/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    const result = await pool.query("SELECT * FROM home_values WHERE id = $1", [
-      id,
-    ]);
-    res.json(normalizeTimestamps(result.rows)[0]);
-  } catch (err) {
-    console.error("Error fetching home value:", err);
-    res.status(500).json({ error: "Server error" });
+  } catch (error) {
+    console.error("Error sending home value message:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
