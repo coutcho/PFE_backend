@@ -303,6 +303,26 @@ router.put("/:id", authenticateToken, upload, async (req, res) => {
   }
 });
 
+// DELETE /api/properties/:id - Delete property
+router.delete("/:id", authenticateToken, async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id))
+    return res.status(400).json({ message: "Invalid property ID" });
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM properties WHERE id=$1 RETURNING *",
+      [id]
+    );
+    if (!result.rows[0])
+      return res.status(404).json({ message: "Property not found" });
+    res.status(204).send();
+  } catch (err) {
+    console.error("Error deleting property:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/properties/favorites - Add favorite
 router.post("/favorites", authenticateToken, async (req, res) => {
   const propertyId = parseInt(req.body.propertyId);
