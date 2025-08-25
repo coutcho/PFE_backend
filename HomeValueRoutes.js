@@ -1,8 +1,8 @@
 // HomeValueRoutes.js
 import express from "express";
 import multer from "multer";
-import { pool } from "./db.js";
-import { supabase } from "./supabase.js";
+import pool from "./db.js";
+import supabase from "./supabase.js";
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
