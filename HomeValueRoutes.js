@@ -2,7 +2,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import pool from "./db.js";
-import supabase from "./supabaseClient.js";
+import supabase from "./supabase.js";
 
 const router = express.Router();
 
@@ -80,12 +80,10 @@ router.post("/", authenticateToken, upload, async (req, res) => {
     });
   } catch (error) {
     console.error("Error processing home value:", error);
-    res
-      .status(500)
-      .json({
-        message: "Failed to process home value request",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Failed to process home value request",
+      error: error.message,
+    });
   }
 });
 
