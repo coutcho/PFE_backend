@@ -2,15 +2,11 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import pool from "./db.js";
-import { createClient } from "@supabase/supabase-js";
+import supabase from "./supabase.js";
 
 const router = express.Router();
 
 // Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
 
 // Multer for memory storage (since we’ll upload directly to Supabase)
 const storage = multer.memoryStorage();
@@ -100,12 +96,10 @@ router.post("/", authenticateToken, upload, async (req, res) => {
     });
   } catch (error) {
     console.error("Error processing home value:", error);
-    res
-      .status(500)
-      .json({
-        message: "Failed to process home value request",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Failed to process home value request",
+      error: error.message,
+    });
   }
 });
 
