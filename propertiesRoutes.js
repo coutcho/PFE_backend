@@ -229,26 +229,34 @@ router.put("/:id", authenticateToken, upload, async (req, res) => {
   } = req.body;
 
   try {
-    // Only update status if that’s the only field
-    if (status && Object.keys(req.body).length === 1) {
-      if (!["Active", "Pending", "Sold", "For Rent"].includes(status)) {
-        return res.status(400).json({ error: "Invalid status" });
+    // Handle new image uploads (same as POST)
+    const uploadedImages = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const fileBuffer = fs.readFileSync(file.path);
+        const { data, error } = await supabase.storage
+          .from("property_images")
+          .upload(`${Date.now()}-${file.originalname}`, fileBuffer, {
+            contentType: file.mimetype,
+            upsert: true,
+          });
+
+        if (error) throw error;
+
+        const { data: publicUrlData, error: publicUrlError } = supabase.storage
+          .from("property_images")
+          .getPublicUrl(data.path);
+
+        if (publicUrlError) throw publicUrlError;
+
+        uploadedImages.push(publicUrlData.publicUrl);
+
+        fs.unlinkSync(file.path);
       }
-      const statusUpdate = await pool.query(
-        "UPDATE properties SET status=$1 WHERE id=$2 RETURNING *",
-        [status, id]
-      );
-      if (!statusUpdate.rows[0])
-        return res.status(404).json({ error: "Property not found" });
-      return res.json({
-        message: "Status updated",
-        property: statusUpdate.rows[0],
-      });
     }
 
     const existingImages = images_path ? JSON.parse(images_path) : [];
-    const newImages = req.files?.map((f) => `/uploads/${f.filename}`) || [];
-    const updatedImages = [...existingImages, ...newImages];
+    const updatedImages = [...existingImages, ...uploadedImages];
 
     const parsedFeatures =
       typeof features === "string" ? JSON.parse(features) : features;
@@ -257,10 +265,12 @@ router.put("/:id", authenticateToken, upload, async (req, res) => {
 
     const updateResult = await pool.query(
       `
-      UPDATE properties SET title=$1, price=$2, location=$3, type=$4, bedrooms=$5, bathrooms=$6, etage=$7,
-      square_footage=$8, description=$9, features=$10, status=$11, lat=$12, long=$13, images_path=$14, equipe=$15, user_id=$16
+      UPDATE properties 
+      SET title=$1, price=$2, location=$3, type=$4, bedrooms=$5, bathrooms=$6, etage=$7,
+          square_footage=$8, description=$9, features=$10, status=$11, lat=$12, long=$13, 
+          images_path=$14, equipe=$15, user_id=$16
       WHERE id=$17 RETURNING *
-    `,
+      `,
       [
         title,
         parseInt(price),
@@ -290,26 +300,6 @@ router.put("/:id", authenticateToken, upload, async (req, res) => {
     if (err.code === "23503")
       return res.status(400).json({ error: "Invalid agent ID" });
     res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// DELETE /api/properties/:id - Delete property
-router.delete("/:id", authenticateToken, async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (isNaN(id))
-    return res.status(400).json({ message: "Invalid property ID" });
-
-  try {
-    const result = await pool.query(
-      "DELETE FROM properties WHERE id=$1 RETURNING *",
-      [id]
-    );
-    if (!result.rows[0])
-      return res.status(404).json({ message: "Property not found" });
-    res.status(204).send();
-  } catch (err) {
-    console.error("Error deleting property:", err);
-    res.status(500).json({ error: err.message });
   }
 });
 
