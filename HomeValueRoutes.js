@@ -1,132 +1,41 @@
-// backend/index.js
+// HomeValueRoutes.js
 import express from "express";
-import cors from "cors";
-import pg from "pg";
 import multer from "multer";
-import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
+import { pool } from "./db.js";
+import { supabase } from "./supabase.js";
 
-dotenv.config();
+const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-// PostgreSQL pool
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
-
-// Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
-
-// Middlewares
-app.use(express.json());
-app.use(cors());
-
-// Multer memory storage (not saving locally)
-const storage = multer.memoryStorage();
-const upload = multer({ storage }).array("images", 10);
-
-// Helper to upload to Supabase
-const uploadToSupabase = async (file) => {
+/**
+ * Helper: Upload image to Supabase storage
+ */
+async function uploadToSupabase(file) {
   const fileName = `${Date.now()}-${file.originalname}`;
   const { error } = await supabase.storage
-    .from("property_images") // bucket name
-    .upload(fileName, file.buffer, {
-      contentType: file.mimetype,
-    });
+    .from("property_images")
+    .upload(fileName, file.buffer, { contentType: file.mimetype });
 
   if (error) throw error;
 
+  // Generate public URL
   const { data } = supabase.storage
     .from("property_images")
     .getPublicUrl(fileName);
-
   return data.publicUrl;
-};
+}
 
-// ROUTES
+/**
+ * ====================
+ * Routes
+ * ====================
+ */
 
-// Create new home value (listing)
-app.post("/api/home-values", upload, async (req, res) => {
-  try {
-    const { address } = req.body;
-    const userId = req.user?.id || null; // adjust if using auth middleware
-
-    const images = [];
-    if (req.files) {
-      for (const file of req.files) {
-        const url = await uploadToSupabase(file);
-        images.push(url);
-      }
-    }
-
-    const result = await pool.query(
-      `INSERT INTO home_values (address, images, user_id, expert_id, created_at)
-       VALUES ($1, $2, $3, NULL, NOW()) RETURNING *`,
-      [address, JSON.stringify(images), userId]
-    );
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Error inserting home value:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// Get all home values
-app.get("/api/home-values", async (req, res) => {
+// ✅ Get all users & experts (must come BEFORE /:id)
+router.get("/user-and-expert", async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT * FROM home_values ORDER BY created_at DESC"
-    );
-    res.json(result.rows);
-  } catch (err) {
-    console.error("Error fetching home values:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// Update existing home value
-app.put("/api/home-values/:id", upload, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { address, existingImages } = req.body;
-
-    let images = JSON.parse(existingImages || "[]");
-
-    if (req.files) {
-      for (const file of req.files) {
-        const url = await uploadToSupabase(file);
-        images.push(url);
-      }
-    }
-
-    const result = await pool.query(
-      `UPDATE home_values
-       SET address = $1, images = $2
-       WHERE id = $3
-       RETURNING *`,
-      [address, JSON.stringify(images), id]
-    );
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Error updating home value:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// Other routes (keep your existing ones)
-app.get("/api/user-and-expert", async (req, res) => {
-  // example: fetch users + experts
-  try {
-    const result = await pool.query(
-      "SELECT * FROM users WHERE role IN ('user','expert')"
+      "SELECT * FROM users WHERE role IN ('user', 'expert')"
     );
     res.json(result.rows);
   } catch (err) {
@@ -135,11 +44,12 @@ app.get("/api/user-and-expert", async (req, res) => {
   }
 });
 
-app.put("/api/home-values/:id/validate", async (req, res) => {
+// ✅ Validate a home value (must come BEFORE /:id)
+router.put("/:id/validate", async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
-      `UPDATE home_values SET validated = true WHERE id = $1 RETURNING *`,
+      "UPDATE home_values SET validated = true WHERE id = $1 RETURNING *",
       [id]
     );
     res.json(result.rows[0]);
@@ -149,7 +59,99 @@ app.put("/api/home-values/:id/validate", async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// ✅ Get all home values
+router.get("/", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM home_values ORDER BY id DESC"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching home values:", err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
+
+// ✅ Create a new home value with images
+router.post("/", upload.array("images", 5), async (req, res) => {
+  try {
+    const { title, description, price, user_id } = req.body;
+
+    // Upload images to Supabase
+    const imageUrls = [];
+    for (const file of req.files) {
+      const url = await uploadToSupabase(file);
+      imageUrls.push(url);
+    }
+
+    const result = await pool.query(
+      `INSERT INTO home_values (title, description, price, user_id, images_path)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [title, description, price, user_id, imageUrls]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("Error creating home value:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ✅ Update home value
+router.put("/:id", upload.array("images", 5), async (req, res) => {
+  const { id } = req.params;
+  const { title, description, price } = req.body;
+
+  try {
+    let imageUrls = [];
+
+    // Upload new images if provided
+    if (req.files.length > 0) {
+      for (const file of req.files) {
+        const url = await uploadToSupabase(file);
+        imageUrls.push(url);
+      }
+    }
+
+    const result = await pool.query(
+      `UPDATE home_values
+       SET title = $1, description = $2, price = $3, images_path = $4
+       WHERE id = $5 RETURNING *`,
+      [title, description, price, imageUrls, id]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error updating home value:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ✅ Delete home value
+router.delete("/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query("DELETE FROM home_values WHERE id = $1", [id]);
+    res.json({ message: "Home value deleted" });
+  } catch (err) {
+    console.error("Error deleting home value:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ❗️ Generic route must come LAST
+router.get("/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query("SELECT * FROM home_values WHERE id = $1", [
+      id,
+    ]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error fetching home value:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+export default router;
