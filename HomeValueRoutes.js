@@ -50,7 +50,7 @@ const uploadToSupabase = async (files) => {
   for (const file of files) {
     const fileName = `${Date.now()}-${file.originalname}`;
     const { error } = await supabase.storage
-      .from("uploads") // bucket name
+      .from("property_images") // bucket name
       .upload(fileName, file.buffer, {
         contentType: file.mimetype,
         upsert: true,
@@ -62,7 +62,7 @@ const uploadToSupabase = async (files) => {
     }
 
     const { data: publicUrlData } = supabase.storage
-      .from("uploads")
+      .from("property_images")
       .getPublicUrl(fileName);
 
     uploadedUrls.push(publicUrlData.publicUrl);
